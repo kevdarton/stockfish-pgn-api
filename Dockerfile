@@ -3,6 +3,8 @@ FROM python:3.11-slim
 # Install stockfish
 RUN apt-get update && apt-get install -y --no-install-recommends stockfish \
     && rm -rf /var/lib/apt/lists/*
+    
+ENV PATH="/usr/games:${PATH}"
 
 WORKDIR /app
 COPY requirements.txt /app/
