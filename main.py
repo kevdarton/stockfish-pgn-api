@@ -47,7 +47,7 @@ def analyze_pgn(req: AnalyzeRequest) -> Dict[str, Any]:
         board = game.board()
 
     # Launch Stockfish
-    engine = chess.engine.SimpleEngine.popen_uci("stockfish")
+    engine = chess.engine.SimpleEngine.popen_uci("/usr/games/stockfish")
     try:
         # configure multipv if supported
         try:
