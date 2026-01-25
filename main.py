@@ -33,12 +33,34 @@ def _score_to_cp(score: chess.engine.PovScore) -> Optional[int]:
         return 100000 if m > 0 else -100000
     return s.score()
 
+def ok(*, legal: bool = True, per_ply=None, key_moments=None, status: str = "ok", error=None) -> Dict[str, Any]:
+    return {
+        "status": status,                 # "ok" | "partial" | "error"
+        "legal": bool(legal),
+        "per_ply": per_ply or [],
+        "key_moments": key_moments or [],
+        "error": error                    # None or {"code":..., "message":..., "details":...}
+    }
+
+def fail(code: str, message: str, details=None, *, legal: bool = False, per_ply=None, key_moments=None) -> Dict[str, Any]:
+    return ok(
+        legal=legal,
+        per_ply=per_ply,
+        key_moments=key_moments,
+        status="error",
+        error={
+            "code": code,
+            "message": message,
+            "details": details or {}
+        }
+    )
+    
 @app.post("/analyze_pgn")
 def analyze_pgn(req: AnalyzeRequest) -> Dict[str, Any]:
     # Parse PGN
     game = chess.pgn.read_game(io.StringIO(req.pgn))
     if game is None:
-        return {"legal": False, "error": "Could not parse PGN."}
+    return fail("INVALID_PGN", "Could not parse PGN.")
 
     # Start board
     if req.initial_fen:
@@ -64,15 +86,17 @@ def analyze_pgn(req: AnalyzeRequest) -> Dict[str, Any]:
 
             # Legality check BEFORE pushing
             if move not in board.legal_moves:
-                return {
-                    "legal": False,
-                    "first_illegal_move": {
-                        "ply": ply,
-                        "uci": move.uci(),
-                        "reason": "Move is not legal from reconstructed position.",
-                        "fen_before": board.fen(),
-                    }
-                }
+                return fail(
+        "ILLEGAL_MOVE",
+        "Move is not legal from reconstructed position.",
+        details={
+            "first_illegal_move": {
+                "ply": ply,
+                "uci": move.uci(),
+                "fen_before": board.fen(),
+            }
+        }
+    )
 
             san = board.san(move)
             board.push(move)
@@ -123,7 +147,7 @@ def analyze_pgn(req: AnalyzeRequest) -> Dict[str, Any]:
         key = [x for x in per_ply if isinstance(x.get("delta_cp"), int)]
         key_sorted = sorted(key, key=lambda x: abs(x["delta_cp"]), reverse=True)[:5]
 
-        return {"legal": True, "per_ply": per_ply, "key_moments": key_sorted}
+        return ok(legal=True, per_ply=per_ply, key_moments=key_sorted)
 
     finally:
         engine.quit()
