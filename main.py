@@ -60,7 +60,7 @@ def analyze_pgn(req: AnalyzeRequest) -> Dict[str, Any]:
     # Parse PGN
     game = chess.pgn.read_game(io.StringIO(req.pgn))
     if game is None:
-    return fail("INVALID_PGN", "Could not parse PGN.")
+        return fail("INVALID_PGN", "Could not parse PGN.")
 
     # Start board
     if req.initial_fen:
@@ -86,7 +86,7 @@ def analyze_pgn(req: AnalyzeRequest) -> Dict[str, Any]:
 
             # Legality check BEFORE pushing
             if move not in board.legal_moves:
-                return fail(
+    return fail(
         "ILLEGAL_MOVE",
         "Move is not legal from reconstructed position.",
         details={
