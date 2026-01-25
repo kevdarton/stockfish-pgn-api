@@ -86,17 +86,17 @@ def analyze_pgn(req: AnalyzeRequest) -> Dict[str, Any]:
 
             # Legality check BEFORE pushing
             if move not in board.legal_moves:
-    return fail(
-        "ILLEGAL_MOVE",
-        "Move is not legal from reconstructed position.",
-        details={
-            "first_illegal_move": {
-                "ply": ply,
-                "uci": move.uci(),
-                "fen_before": board.fen(),
-            }
-        }
-    )
+                return fail(
+                    "ILLEGAL_MOVE",
+                    "Move is not legal from reconstructed position.",
+                    details={
+                        "first_illegal_move": {
+                            "ply": ply,
+                            "uci": move.uci(),
+                            "fen_before": board.fen(),
+                        }
+                    }
+                )
 
             san = board.san(move)
             board.push(move)
