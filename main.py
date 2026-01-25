@@ -57,20 +57,29 @@ def fail(code: str, message: str, details=None, *, legal: bool = False, per_ply=
     
 @app.post("/analyze_pgn")
 def analyze_pgn(req: AnalyzeRequest) -> Dict[str, Any]:
-    # Parse PGN
-    game = chess.pgn.read_game(io.SringIO(req.pgn))
+    # Parse PGN safely
+    try:
+        game = chess.pgn.read_game(io.StringIO(req.pgn))
+    except Exception as e:
+        return fail("INVALID_PGN", "Could not parse PGN.", details={"exception": str(e)})
+
     if game is None:
-        return fail ("INVALID_PGN", "Could not parse PGN.")
+        return fail("INVALID_PGN", "Could not parse PGN.")
 
     # Start board
-    if req.initial_fen:
-        board = chess.Board(req.initial_fen)
-    else:
-        board = game.board()
-
-    # Launch Stockfish
-    engine = chess.engine.SimpleEngine.popen_uci("/usr/games/stockfish")
     try:
+        if req.initial_fen:
+            board = chess.Board(req.initial_fen)
+        else:
+            board = game.board()
+    except Exception as e:
+        return fail("INVALID_FEN", "Initial FEN is invalid.", details={"exception": str(e)})
+
+    engine = None
+    try:
+        # Launch Stockfish
+        engine = chess.engine.SimpleEngine.popen_uci("/usr/games/stockfish")
+
         # configure multipv if supported
         try:
             engine.configure({"MultiPV": max(1, min(req.multipv, 3))})
@@ -78,9 +87,8 @@ def analyze_pgn(req: AnalyzeRequest) -> Dict[str, Any]:
             pass
 
         per_ply: List[Dict[str, Any]] = []
-        prev_eval = None
-
         ply = 0
+
         for move in game.mainline_moves():
             ply += 1
 
@@ -95,7 +103,7 @@ def analyze_pgn(req: AnalyzeRequest) -> Dict[str, Any]:
                             "uci": move.uci(),
                             "fen_before": board.fen(),
                         }
-                    }
+                    },
                 )
 
             san = board.san(move)
@@ -103,9 +111,12 @@ def analyze_pgn(req: AnalyzeRequest) -> Dict[str, Any]:
 
             # Analyse after the move (position for side to move)
             limit = chess.engine.Limit(depth=req.depth, time=req.time_sec)
-            analysis = engine.analyse(board, limit, multipv=max(1, min(req.multipv, 3)))
+            analysis = engine.analyse(
+                board,
+                limit,
+                multipv=max(1, min(req.multipv, 3)),
+            )
 
-            # analysis can be dict (multipv=1) or list (multipv>1)
             lines = analysis if isinstance(analysis, list) else [analysis]
 
             pvs: List[Dict[str, Any]] = []
@@ -115,39 +126,59 @@ def analyze_pgn(req: AnalyzeRequest) -> Dict[str, Any]:
                 pv = item.get("pv", [])
                 if not pv:
                     continue
-                best_uci = pv[0].uci()
-                # SAN needs a board at current position
-                best_san = board.san(pv[0])
+
+                best_move = pv[0]
+                best_uci = best_move.uci()
+                best_san = board.san(best_move)
                 eval_cp = _score_to_cp(item["score"])
+
+                rank = int(item.get("multipv", 1))
                 pvs.append({
-                    "rank": int(item.get("multipv", 1)),
+                    "rank": rank,
                     "uci": best_uci,
                     "san": best_san,
                     "eval_cp": eval_cp
                 })
-                if item.get("multipv", 1) == 1:
-                    eval_cp_main = eval_cp
 
-            delta = None
-            if prev_eval is not None and eval_cp_main is not None:
-                delta = eval_cp_main - prev_eval
-            prev_eval = eval_cp_main if eval_cp_main is not None else prev_eval
+                if rank == 1:
+                    eval_cp_main = eval_cp
 
             per_ply.append({
                 "ply": ply,
                 "played_uci": move.uci(),
                 "played_san": san,
-                "fen": board.fen(),
+                "fen_after": board.fen(),
                 "eval_cp": eval_cp_main,
-                "delta_cp": delta,
-                "multipv": sorted(pvs, key=lambda x: x["rank"])
+                "pvs": sorted(pvs, key=lambda x: x["rank"]),
             })
 
-        # Key moments: biggest eval swings by absolute delta
-        key = [x for x in per_ply if isinstance(x.get("delta_cp"), int)]
-        key_sorted = sorted(key, key=lambda x: abs(x["delta_cp"]), reverse=True)[:5]
+        # Key moments: largest eval swings (simple heuristic)
+        # (You may already have a smarter key-moment selector elsewhere.)
+        key_moments: List[Dict[str, Any]] = []
+        prev = None
+        for row in per_ply:
+            cur = row.get("eval_cp")
+            if prev is not None and cur is not None:
+                swing = abs(cur - prev)
+                key_moments.append({
+                    "ply": row["ply"],
+                    "played_san": row["played_san"],
+                    "eval_cp": cur,
+                    "swing": swing
+                })
+            prev = cur
+
+        key_sorted = sorted(key_moments, key=lambda x: x.get("swing", 0), reverse=True)[:5]
 
         return ok(legal=True, per_ply=per_ply, key_moments=key_sorted)
 
+    except Exception as e:
+        # Always return stable envelope, never crash ASGI
+        return fail("INTERNAL_ERROR", "Unexpected internal error during analysis.", details={"exception": str(e)})
+
     finally:
-        engine.quit()
+        if engine is not None:
+            try:
+                engine.quit()
+            except Exception:
+                pass
